@@ -40,9 +40,7 @@ const processQueue = async () => {
         document: pdfBuffer,
         mimetype: "application/pdf",
         fileName: fileName || "Comprobante.pdf",
-        // text: caption ?? "",
       });
-      console.log(caption);
       if (caption && caption.trim() !== "") {
         console.log(
           `[${sessionId}] Enviando texto de acompañamiento a ${to}...`

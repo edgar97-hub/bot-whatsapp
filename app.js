@@ -16,8 +16,6 @@ const wss = new WebSocketServer({ server }); // Attach the WebSocket Server to t
 const PORT = process.env.PORT || 3000;
 
 app.use(express.json({ limit: "50mb" })); // Allow large PDFs
-
-// --- REST API for sending messages ---
 app.use("/api", apiRoutes);
 
 // --- WebSocket for QR linking ---
