@@ -1,4 +1,5 @@
 node_modules/
 sessions/
 .env
+sessions.config.json
 *.log
