@@ -140,6 +140,7 @@ const createSession = async (sessionId) => {
     // Manejo de conexión cerrada
     if (connection === "close") {
       const statusCode = lastDisconnect?.error?.output?.statusCode;
+      console.log(lastDisconnect?.error);
       // Determina si la sesión debe intentar reconectarse o si fue desvinculada permanentemente.
       const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
       const newStatus = shouldReconnect ? "disconnected" : "unlinked";
