@@ -84,7 +84,8 @@ const createSession = async (sessionId) => {
    * Maneja las actualizaciones del estado de conexión de Baileys.
    * @param {object} update - Objeto de actualización de conexión.
    */
-  sock.ev.on("connection.update", async (update) => { // Made the callback async
+  sock.ev.on("connection.update", async (update) => {
+    // Made the callback async
     const { connection, lastDisconnect, qr } = update;
     const session = sessions.get(sessionId);
 
@@ -141,7 +142,7 @@ const createSession = async (sessionId) => {
     if (connection === "close") {
       const statusCode = lastDisconnect?.error?.output?.statusCode;
       // Determina si la sesión debe intentar reconectarse o si fue desvinculada permanentemente.
-      const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+      const shouldReconnect = false; //statusCode !== DisconnectReason.loggedOut;
       const newStatus = shouldReconnect ? "disconnected" : "unlinked";
 
       // Actualiza el estado de la sesión si ha cambiado.
@@ -175,7 +176,9 @@ const createSession = async (sessionId) => {
               SESSION_CONFIG_PATH,
               JSON.stringify(updatedConfigs, null, 2)
             );
-            console.log(`[${sessionId}] Sesión eliminada de ${SESSION_CONFIG_PATH}.`);
+            console.log(
+              `[${sessionId}] Sesión eliminada de ${SESSION_CONFIG_PATH}.`
+            );
           } catch (error) {
             console.error(
               `[${sessionId}] Error al actualizar ${SESSION_CONFIG_PATH} después de desvinculación:`,

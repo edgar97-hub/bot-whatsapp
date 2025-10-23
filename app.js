@@ -14,38 +14,15 @@ const fs = require("fs"); // Módulo para interactuar con el sistema de archivos
 
 /**
  * Ruta al archivo de configuración de sesiones.
- * @type {string}
  */
 const SESSION_CONFIG_PATH = "./sessions.config.json";
-
-/**
- * Instancia de la aplicación Express.
- * @type {express.Application}
- */
 const app = express();
-
-/**
- * Servidor HTTP nativo de Node.js, creado a partir de la aplicación Express.
- * @type {http.Server}
- */
 const server = http.createServer(app);
 
-/**
- * Instancia del servidor WebSocket, adjuntada al servidor HTTP.
- * @type {WebSocketServer}
- */
 const wss = new WebSocketServer({ server });
-
-/**
- * Puerto en el que el servidor escuchará, obtenido de las variables de entorno o por defecto 3000.
- * @type {number}
- */
 const PORT = process.env.PORT || 3000;
 
-// Middleware para parsear cuerpos de solicitud JSON, con un límite de 50MB para PDFs grandes.
 app.use(express.json({ limit: "50mb" }));
-
-// Monta las rutas de la API REST bajo el prefijo /api.
 app.use("/api", apiRoutes);
 
 /**
