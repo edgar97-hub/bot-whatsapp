@@ -9,13 +9,13 @@ const {
   useMultiFileAuthState,
   DisconnectReason,
   Browsers,
+  fetchLatestBaileysVersion,
 } = require("@whiskeysockets/baileys");
 const pino = require("pino");
 const fs = require("fs");
 const path = require("path");
 const EventEmitter = require("events");
-
-let sessionConfigPromise = Promise.resolve(); // Promesa para serializar escrituras en sessions.config.json
+const { isValidSessionToken } = require("../middleware/auth.middleware");
 
 /**
  * Mapa para almacenar las instancias de las sesiones activas.
@@ -25,13 +25,8 @@ let sessionConfigPromise = Promise.resolve(); // Promesa para serializar escritu
 const sessions = new Map();
 
 /**
- * Ruta al archivo de configuración de sesiones.
- * @type {string}
- */
-const SESSION_CONFIG_PATH = path.resolve("./sessions.config.json");
-
-/**
  * Directorio raíz para los datos de autenticación de las sesiones.
+ * Baileys guarda automaticamente las credenciales (creds.json) en subcarpetas.
  * @type {string}
  */
 const SESSIONS_DIR = path.resolve("./sessions");
@@ -56,7 +51,7 @@ const createSession = async (sessionId) => {
   // Si la sesión ya está en memoria (en proceso de conexión o activa), la devuelve.
   if (sessions.has(sessionId)) {
     console.log(
-      `[${sessionId}] La creación de la sesión ya está en proceso o activa.`
+      `[${sessionId}] La creación de la sesión ya está en proceso o activa.`,
     );
     return sessions.get(sessionId).sock;
   }
@@ -66,8 +61,15 @@ const createSession = async (sessionId) => {
   // Carga o crea el estado de autenticación multi-archivo para la sesión.
   const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
 
+  // Obtiene la última versión de WhatsApp compatible con Baileys desde el
+  // repositorio oficial. Esto evita el error 405 (Connection Failure) que
+  // ocurre cuando se negocia una versión que WhatsApp ya no acepta.
+  const { version } = await fetchLatestBaileysVersion();
+  console.log(`[${sessionId}] Usando versión de WhatsApp: ${version.join(".")}`);
+
   // Crea una nueva instancia del socket de Baileys.
   const sock = makeWASocket({
+    version,
     auth: state,
     printQRInTerminal: false, // Deshabilita la impresión de QR en terminal, lo manejamos vía WebSocket.
     logger: pino({ level: "silent" }), // Configura el logger de Baileys.
@@ -84,7 +86,8 @@ const createSession = async (sessionId) => {
    * Maneja las actualizaciones del estado de conexión de Baileys.
    * @param {object} update - Objeto de actualización de conexión.
    */
-  sock.ev.on("connection.update", async (update) => { // Made the callback async
+  sock.ev.on("connection.update", async (update) => {
+    // Made the callback async
     const { connection, lastDisconnect, qr } = update;
     const session = sessions.get(sessionId);
 
@@ -104,7 +107,7 @@ const createSession = async (sessionId) => {
     if (connection === "open") {
       session.status = "linking"; // Estado intermedio mientras se verifica la vinculación.
       console.log(
-        `[${sessionId}] Conexión abierta, verificando vinculación...`
+        `[${sessionId}] Conexión abierta, verificando vinculación...`,
       );
       // Emite una actualización de estado para el cliente.
       sessionEmitter.emit("status_update", { sessionId, status: "linking" });
@@ -125,7 +128,7 @@ const createSession = async (sessionId) => {
         } else {
           // Si no se encontró creds.json después del retardo, algo falló en la vinculación.
           console.error(
-            `[${sessionId}] Fallo en la vinculación: creds.json no encontrado.`
+            `[${sessionId}] Fallo en la vinculación: creds.json no encontrado.`,
           );
           session.status = "failed_linking";
           sessionEmitter.emit("connection_close", {
@@ -142,14 +145,18 @@ const createSession = async (sessionId) => {
       const statusCode = lastDisconnect?.error?.output?.statusCode;
       console.log(lastDisconnect?.error);
       // Determina si la sesión debe intentar reconectarse o si fue desvinculada permanentemente.
-      const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
-      const newStatus = shouldReconnect ? "disconnected" : "unlinked";
+      const isLoggedOut = statusCode === DisconnectReason.loggedOut;
+      // Error 405 = credenciales corruptas/expiradas (badSession).
+      // En este caso, debemos eliminar las credenciales del disco para que
+      // Baileys genere un QR nuevo en el proximo intento.
+      const isBadSession = statusCode === 405;
+      const newStatus = isLoggedOut ? "unlinked" : "disconnected";
 
       // Actualiza el estado de la sesión si ha cambiado.
       if (session.status !== newStatus) {
         session.status = newStatus;
         console.log(
-          `[${sessionId}] Conexión cerrada. Estado: ${newStatus}. Razón: ${statusCode}`
+          `[${sessionId}] Conexión cerrada. Estado: ${newStatus}. Razón: ${statusCode}`,
         );
         // Emite un evento de cierre de conexión con el nuevo estado.
         sessionEmitter.emit("connection_close", {
@@ -158,52 +165,92 @@ const createSession = async (sessionId) => {
         });
       }
 
-      // Si la sesión fue desvinculada permanentemente, la elimina de la memoria y del disco.
-      if (newStatus === "unlinked") {
-        if (fs.existsSync(sessionPath)) {
-          fs.rmSync(sessionPath, { recursive: true, force: true });
-          console.log(`[${sessionId}] Carpeta de sesión eliminada.`);
-        }
-        // Serializa la operación de escritura en el archivo de configuración.
-        sessionConfigPromise = sessionConfigPromise.then(async () => {
-          try {
-            // También la elimina del archivo de configuración para que no se intente cargar de nuevo.
-            const configData = fs.readFileSync(SESSION_CONFIG_PATH, "utf-8");
-            const updatedConfigs = JSON.parse(configData).filter(
-              (s) => s.sessionId !== sessionId
-            );
-            fs.writeFileSync(
-              SESSION_CONFIG_PATH,
-              JSON.stringify(updatedConfigs, null, 2)
-            );
-            console.log(`[${sessionId}] Sesión eliminada de ${SESSION_CONFIG_PATH}.`);
-          } catch (error) {
-            console.error(
-              `[${sessionId}] Error al actualizar ${SESSION_CONFIG_PATH} después de desvinculación:`,
-              error
+      // Si la sesión fue desvinculada (loggedOut de WhatsApp):
+      // - Si fue un logout INTENCIONAL (desde la UI), eliminamos las credenciales del disco
+      //   para que no se reconecte automáticamente y se genere un nuevo QR.
+      // - Si fue un logout NO intencional (WhatsApp cerró la sesión), mantenemos las
+      //   credenciales para intentar reconectar.
+      if (isLoggedOut) {
+        sessions.delete(sessionId); // Elimina la sesión del mapa en memoria.
+
+        // Verificar si el logout fue intencional (desde la UI)
+        // El controlador de logout establece session.intentionalLogout = true
+        // antes de llamar a sock.logout()
+        if (session.intentionalLogout) {
+          // Eliminar las credenciales del disco para que no se reconecte
+          const sessionPath = path.join(SESSIONS_DIR, sessionId);
+          if (fs.existsSync(sessionPath)) {
+            fs.rmSync(sessionPath, { recursive: true, force: true });
+            console.log(
+              `[${sessionId}] Logout intencional. Credenciales eliminadas del disco.`,
             );
           }
-        });
-        await sessionConfigPromise; // Espera a que la operación de escritura se complete.
-        sessions.delete(sessionId); // Elimina la sesión del mapa en memoria.
+        } else {
+          // Logout no intencional: mantener credenciales para reconectar
+          console.log(
+            `[${sessionId}] Sesión desvinculada (no intencional). Programando reconexión automática en 30 segundos...`,
+          );
+          setTimeout(() => {
+            if (!sessions.has(sessionId)) {
+              console.log(
+                `[${sessionId}] Intentando reconexión automática después de desvinculación...`,
+              );
+              createSession(sessionId).catch((err) =>
+                console.error(
+                  `[${sessionId}] Falla en reconexión automática post-logout:`,
+                  err,
+                ),
+              );
+            }
+          }, 30000); // Espera 30 segundos antes de reintentar.
+        }
       }
 
-      // Lógica de reconexión automática
-      if (shouldReconnect) {
+      // Lógica de reconexión automática para desconexiones temporales (pérdida de red, timeout, etc.)
+      if (!isLoggedOut) {
         // Borra la sesión de la memoria para permitir que `createSession` la recree.
         sessions.delete(sessionId);
-        console.log(`[${sessionId}] Programando reconexión en 15 segundos...`);
-        setTimeout(() => {
-          // Solo intenta recrear la sesión si no se ha reconectado mientras tanto.
-          if (!sessions.has(sessionId)) {
-            createSession(sessionId).catch((err) =>
-              console.error(
-                `[${sessionId}] Falla en el reintento de conexión:`,
-                err
-              )
+
+        // Si las credenciales estan corruptas (error 405), eliminarlas del disco
+        // para que Baileys genere un QR nuevo en el proximo intento.
+        if (isBadSession) {
+          const sessionPath = path.join(SESSIONS_DIR, sessionId);
+          if (fs.existsSync(sessionPath)) {
+            fs.rmSync(sessionPath, { recursive: true, force: true });
+            console.log(
+              `[${sessionId}] Credenciales corruptas eliminadas. Se generara un nuevo QR.`,
             );
           }
-        }, 15000); // Espera 15 segundos antes de intentar reconectar.
+          // Para badSession, reconectar rapido para mostrar el QR
+          console.log(
+            `[${sessionId}] Programando reconexión para nuevo QR en 3 segundos...`,
+          );
+          setTimeout(() => {
+            if (!sessions.has(sessionId)) {
+              createSession(sessionId).catch((err) =>
+                console.error(
+                  `[${sessionId}] Falla en el reintento post-badSession:`,
+                  err,
+                ),
+              );
+            }
+          }, 3000); // 3 segundos para mostrar QR rapidamente
+        } else {
+          console.log(
+            `[${sessionId}] Programando reconexión en 15 segundos...`,
+          );
+          setTimeout(() => {
+            // Solo intenta recrear la sesión si no se ha reconectado mientras tanto.
+            if (!sessions.has(sessionId)) {
+              createSession(sessionId).catch((err) =>
+                console.error(
+                  `[${sessionId}] Falla en el reintento de conexión:`,
+                  err,
+                ),
+              );
+            }
+          }, 15000); // Espera 15 segundos antes de intentar reconectar.
+        }
       }
     }
   });
@@ -212,26 +259,60 @@ const createSession = async (sessionId) => {
 };
 
 /**
- * Inicializa todas las sesiones definidas en el archivo de configuración.
- * Se llama al arrancar la aplicación.
+ * Inicializa las sesiones de WhatsApp leyendo directamente el directorio sessions/.
+ * Baileys guarda automaticamente las credenciales (creds.json) en subcarpetas
+ * dentro de sessions/. Cada subcarpeta con creds.json es una sesion vinculada.
+ * Las carpetas sin creds.json se ignoran (esperan vinculacion via QR).
  */
 const initialize = async () => {
   try {
-    const configData = fs.readFileSync(SESSION_CONFIG_PATH, "utf-8");
-    const sessionConfigs = JSON.parse(configData);
-
-    for (const config of sessionConfigs) {
-      // Crea la sesión solo si no está ya en memoria.
-      if (!sessions.has(config.sessionId)) {
-        await createSession(config.sessionId);
-      }
+    if (!fs.existsSync(SESSIONS_DIR)) {
+      fs.mkdirSync(SESSIONS_DIR, { recursive: true });
+      console.log("Directorio de sesiones creado.");
+      return;
     }
-    console.log("Todas las sesiones inicializadas desde la configuración.");
+
+    const sessionDirs = fs.readdirSync(SESSIONS_DIR, { withFileTypes: true });
+    let connectedCount = 0;
+
+    for (const dirent of sessionDirs) {
+      if (!dirent.isDirectory()) continue;
+
+      const sessionId = dirent.name;
+      if (sessions.has(sessionId)) continue;
+
+      // Solo conectar si existe creds.json (sesion vinculada)
+      const credsPath = path.join(SESSIONS_DIR, sessionId, "creds.json");
+      if (fs.existsSync(credsPath)) {
+        // Validar que el token exista en tokens.json
+        if (!isValidSessionToken(sessionId)) {
+          console.log(
+            `[${sessionId}] Token no registrado en tokens.json. Eliminando credenciales huérfanas...`,
+          );
+          fs.rmSync(path.join(SESSIONS_DIR, sessionId), {
+            recursive: true,
+            force: true,
+          });
+          continue;
+        }
+        await createSession(sessionId);
+        connectedCount++;
+      }
+      // Si no hay creds.json, la carpeta es de una sesion que se desconecto
+      // o nunca se vinculo. Se ignora silenciosamente.
+    }
+
+    if (connectedCount > 0) {
+      console.log(
+        `${connectedCount} sesion(es) con credenciales inicializada(s).`,
+      );
+    } else {
+      console.log(
+        "No se encontraron sesiones con credenciales. Esperando vinculacion via QR...",
+      );
+    }
   } catch (error) {
-    console.error(
-      "Error al inicializar sesiones desde la configuración:",
-      error
-    );
+    console.error("Error al inicializar sesiones:", error);
   }
 };
 

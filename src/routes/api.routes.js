@@ -1,12 +1,16 @@
 /**
  * @file src/routes/api.routes.js
  * @description Define las rutas de la API REST para el microservicio.
- * Incluye rutas para el envío de documentos PDF y la desvinculación de sesiones.
+ * Incluye rutas para el envío de documentos PDF, consulta de estado y desvinculación de sesiones.
  */
 
 const express = require("express");
-const authenticateToken = require("../middleware/auth.middleware");
-const { sendPdfController, logout } = require("../controllers/api.controller"); // Importa también la función logout
+const { authenticateToken } = require("../middleware/auth.middleware");
+const {
+  sendPdfController,
+  logout,
+  getSessionStatus,
+} = require("../controllers/api.controller");
 
 /**
  * Instancia del enrutador de Express.
@@ -14,29 +18,37 @@ const { sendPdfController, logout } = require("../controllers/api.controller"); 
  */
 const router = express.Router();
 
-// Aplica el middleware de autenticación a todas las rutas definidas en este enrutador.
-router.use(authenticateToken);
-
 /**
  * Ruta para enviar documentos PDF.
- * @name POST /api/send-pdf
+ * @name POST /ws-bot/send-pdf/:sessionId
+ * @function
+ * @memberof module:routes/api.routes
+ * @param {string} path - Express path con sessionId como parámetro de ruta.
+ * @param {function} middleware - Middleware de autenticación.
+ * @param {function} controller - Controlador para manejar la lógica de envío de PDF.
+ */
+router.post("/ws-bot/send-pdf/:sessionId", authenticateToken, sendPdfController);
+
+/**
+ * Ruta para consultar el estado de una sesión de WhatsApp.
+ * @name GET /ws-bot/sessions/:sessionId/status
  * @function
  * @memberof module:routes/api.routes
  * @param {string} path - Express path.
  * @param {function} middleware - Middleware de autenticación.
- * @param {function} controller - Controlador para manejar la lógica de envío de PDF.
+ * @param {function} controller - Controlador para obtener el estado de la sesión.
  */
-router.post("/send-pdf", sendPdfController);
+router.get("/ws-bot/sessions/:sessionId/status", authenticateToken, getSessionStatus);
 
 /**
  * Ruta para desvincular una sesión de WhatsApp.
- * @name POST /api/sessions/:sessionId/logout
+ * @name POST /ws-bot/sessions/:sessionId/logout
  * @function
  * @memberof module:routes/api.routes
  * @param {string} path - Express path.
  * @param {function} middleware - Middleware de autenticación.
  * @param {function} controller - Controlador para manejar la lógica de desvinculación.
  */
-router.post("/sessions/:sessionId/logout", logout);
+router.post("/ws-bot/sessions/:sessionId/logout", authenticateToken, logout);
 
 module.exports = router;

@@ -50,24 +50,7 @@ whatsapp-bot-service/
 
 ## Configuración Inicial y Ejecución
 
-### 1. Archivo de Configuración de Sesiones (`sessions.config.json`)
-
-Este archivo JSON define las sesiones que el servicio debe gestionar al inicio.
-
-```json
-[
-  {
-    "sessionId": "tienda_lima",
-    "description": "Sistema de Ventas de la Sede Lima"
-  },
-  {
-    "sessionId": "soporte_tecnico",
-    "description": "Canal de Soporte Técnico General"
-  }
-]
-```
-
-### 2. Archivo de Variables de Entorno (`.env`)
+### 1. Archivo de Variables de Entorno (`.env`)
 
 Crea un archivo `.env` en la raíz del proyecto con el siguiente contenido. Asegúrate de cambiar el `API_STATIC_TOKEN` por un valor seguro y largo.
 
@@ -88,7 +71,7 @@ npm init -y
 npm install @whiskeysockets/baileys express dotenv pino pino-pretty ws
 ```
 
-### 4. Scripts de Ejecución
+### 3. Scripts de Ejecución
 
 El `package.json` debe contener los siguientes scripts:
 
@@ -109,7 +92,7 @@ El `package.json` debe contener los siguientes scripts:
 }
 ```
 
-### 5. Archivo `.gitignore`
+### 4. Archivo `.gitignore`
 
 Crea un archivo `.gitignore` en la raíz del proyecto para evitar que archivos sensibles y generados se suban al control de versiones:
 
@@ -120,7 +103,7 @@ sessions/
 *.log
 ```
 
-### 6. Primer Lanzamiento
+### 5. Primer Lanzamiento
 
 Para iniciar el servicio en modo desarrollo (con logs bonitos en consola):
 

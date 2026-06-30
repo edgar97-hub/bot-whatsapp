@@ -8,11 +8,12 @@ const { addMessage } = require("../managers/messageQueue");
 const sessionManager = require("../managers/sessionManager"); // Import sessionManager
 
 /**
- * Controlador para el endpoint POST /api/send-pdf.
+ * Controlador para el endpoint POST /api/send-pdf/:sessionId.
  * Encola un mensaje para enviar un documento PDF a través de WhatsApp.
  * @param {object} req - Objeto de solicitud de Express.
+ * @param {object} req.params - Parámetros de la ruta.
+ * @param {string} req.params.sessionId - ID de la sesión de WhatsApp a utilizar.
  * @param {object} req.body - Cuerpo de la solicitud.
- * @param {string} req.body.sessionId - ID de la sesión de WhatsApp a utilizar.
  * @param {string} req.body.to - Número de teléfono del destinatario.
  * @param {string} req.body.pdfBase64 - Contenido del PDF codificado en Base64.
  * @param {string} [req.body.fileName] - Nombre del archivo PDF (opcional).
@@ -21,7 +22,8 @@ const sessionManager = require("../managers/sessionManager"); // Import sessionM
  * @returns {Promise<void>}
  */
 const sendPdfController = (req, res) => {
-  const { sessionId, to, pdfBase64, fileName, caption } = req.body;
+  const { sessionId } = req.params;
+  const { to, pdfBase64, fileName, caption } = req.body;
 
   // Valida que los parámetros requeridos estén presentes.
   if (!sessionId || !to || !pdfBase64) {
@@ -63,8 +65,11 @@ const logout = async (req, res) => {
 
   try {
     console.log(`[${sessionId}] Recibida solicitud de logout.`);
-    // Llama al método logout de Baileys. Esto también activará la lógica de limpieza
-    // en sessionManager.js (eliminación de archivos y del config.json).
+    // Marcar como logout intencional para que sessionManager elimine las credenciales del disco
+    session.intentionalLogout = true;
+    // Llama al método logout de Baileys. Esto disparará connection === "close"
+    // con statusCode === DisconnectReason.loggedOut en sessionManager.js,
+    // que detectará intentionalLogout y eliminará las credenciales del disco.
     await session.sock.logout();
 
     return res.status(200).json({
@@ -80,7 +85,36 @@ const logout = async (req, res) => {
   }
 };
 
+/**
+ * Controlador para el endpoint GET /api/sessions/:sessionId/status.
+ * Obtiene el estado actual de una sesión de WhatsApp.
+ * @param {object} req - Objeto de solicitud de Express.
+ * @param {object} req.params - Parámetros de la ruta.
+ * @param {string} req.params.sessionId - ID de la sesión a consultar.
+ * @param {object} res - Objeto de respuesta de Express.
+ * @returns {Promise<void>}
+ */
+const getSessionStatus = (req, res) => {
+  const { sessionId } = req.params;
+  const session = sessionManager.getSession(sessionId);
+
+  if (!session) {
+    return res.status(200).json({
+      sessionId,
+      status: "not_found",
+      message: "La sesión no existe o fue eliminada.",
+    });
+  }
+
+  return res.status(200).json({
+    sessionId,
+    status: session.status,
+    qr: session.qr ? "available" : "not_available",
+  });
+};
+
 module.exports = {
   sendPdfController,
-  logout, // Exporta la función de logout
+  logout,
+  getSessionStatus,
 };
